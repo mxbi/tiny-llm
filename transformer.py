@@ -40,7 +40,7 @@ def mha_block_weights(key, n_heads, head_size):
     # Q: could Q=K
     # Q: Could the embedding dimension be different than the whole width
     # Q: I think that q/k/v shouldn't need biases but maybe I'm wrong
-    keys = jax.random.split(keys, 4)
+    keys = jax.random.split(key, 4)
     params['q'] = jax.random.normal(keys[0], shape=(width, width)) / jnp.sqrt(2/width)
     params['k'] = jax.random.normal(keys[1], shape=(width, width)) / jnp.sqrt(2/width)
     params['v'] = jax.random.normal(keys[2], shape=(width, width)) / jnp.sqrt(2/width)
@@ -93,16 +93,16 @@ def ffa_block_forward(params, x):
     hidden = jnp.einsum('sd,dh->sh', x, params['w1']) + params['b1']
     hidden = jax.nn.gelu(hidden)
 
-    out = jnp.einsum('sd,dh->sh', x, params['w2']) + params['b2']
+    out = jnp.einsum('sd,dh->sh', hidden, params['w2']) + params['b2']
     return out
 
-def make_llm(key, n_tokens, head_size, n_heads, n_blocks):
+def make_llm(key, n_vocab, head_size, n_heads, n_blocks):
     width = head_size * n_heads
     params = {}
     # Embedding weights
     key, embed_key = jax.random.split(key)
     params['rmsnorm'] = rmsnorm_weights(width)
-    params['embed'] = jax.random.normal(embed_key, shape=(n_tokens, width)) * 0.02
+    params['embed'] = jax.random.normal(embed_key, shape=(n_vocab, width)) * 0.02
 
     for i in range(n_blocks):
         key, mha_key, ffa_key = jax.random.split(key, 3)
@@ -128,3 +128,4 @@ def make_llm(key, n_tokens, head_size, n_heads, n_blocks):
         return output
         
     return params, forward
+
