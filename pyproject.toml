@@ -1,0 +1,11 @@
+[project]
+name = "teeny-llm"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "jax>=0.10.1",
+    "optax>=0.2.8",
+    "scikit-learn>=1.9.0",
+]
