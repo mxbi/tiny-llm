@@ -1,11 +1,23 @@
 import jax.numpy as jnp
 import jax
 import optax
-import numpy as np
+from orbax.checkpoint import v1 as ocp
+import os
 
 from transformer import make_llm
 from tokenization import CharTokenizer
 from data import data_iterator, load_tinyshakespeare
+
+N_HEADS = 16
+HEAD_SIZE = 32
+N_BLOCKS = 8
+BATCH_SIZE = 32
+CONTEXT_SIZE = 32
+
+VALIDATION_BATCH_SIZE = 256
+VALIDATION_STEPS = 100
+
+CHECKPOINT_STEPS = 1000
 
 import wandb
 run = wandb.init(entity="mxbi", project="teeny-llm")
@@ -16,14 +28,19 @@ jax.config.update("jax_debug_nans", True)
 dataset = load_tinyshakespeare()
 tokenizer = CharTokenizer(dataset[0])
 n_vocab = len(tokenizer.tokens)
+tokenized_data = [tokenizer.tokenize(data) for data in dataset]
+
+total_len = len(tokenized_data[0])
+train_data = [tokenized_data[0][:(total_len*9//10)]]
+val_data = [tokenized_data[0][(total_len*9//10):]]
 
 key = jax.random.PRNGKey(4)
-params, forward = make_llm(key, n_vocab, 32, 16, 8)
+params, forward = make_llm(key, n_vocab, HEAD_SIZE, N_HEADS, N_BLOCKS)
 def get_size(params):
     if isinstance(params, dict):
         return sum(get_size(v) for v in params.values())# {k: get_size(v) for k,v in params.items()}
     return params.size
-print(f'Model size: {get_size(params)} params, data size: {len(dataset[0])} tokens')
+print(f'Model size: {get_size(params)} params, data size: {len(dataset[0])} tokens, {n_vocab} vocab')
 
 batched_forward = jax.vmap(forward, in_axes=(None, 0))
 
@@ -51,14 +68,13 @@ def step(params, X, opt_state):
     params = optax.apply_updates(params, updates)
     return params, opt_state, loss, acc
 
-    # print(f"Epoch {epoch}", end=" ")
-losses = []
-accs = []
+train_iter = data_iterator(train_data, batch_size=BATCH_SIZE, context_size=CONTEXT_SIZE)
+val_iter = data_iterator(val_data, batch_size=VALIDATION_BATCH_SIZE, context_size=CONTEXT_SIZE)
+
 tok = 0
-for i, x_batch in enumerate(data_iterator([tokenizer.tokenize(dataset[0])], batch_size=32, context_size=32)):
+for i, x_batch in enumerate(train_iter):
     tok += x_batch.shape[0] * (x_batch.shape[1] - 1)
     params, opt_state, loss, batch_acc = step(params, x_batch, opt_state)
-    # print(loss, batch_acc)
     print(f'Batch {i} - loss: {loss:.4f} - acc: {batch_acc:.4f} - tok: {tok}')
     wandb.log({
         "loss": loss,
@@ -66,5 +82,15 @@ for i, x_batch in enumerate(data_iterator([tokenizer.tokenize(dataset[0])], batc
         "tok": tok,
     })
 
-    losses.append(loss)
-    accs.append(batch_acc)
+    if i % VALIDATION_STEPS == 0:
+        val_loss, val_acc = mce_loss(params, next(val_iter))
+        print(f'Valid - loss: {val_loss:.4f} - acc: {val_acc:.4f}')
+        wandb.log({
+            "val_loss": val_loss,
+            "val_acc": val_acc,
+        })
+
+    if i % CHECKPOINT_STEPS == 0:
+        print(f'Checkpoint {i}')
+        ocp.save(os.path.abspath(f'models/{wandb.run.id}_{i}'), {'params': params, 'opt_state': opt_state})
+        wandb.log({"checkpoint": i})
