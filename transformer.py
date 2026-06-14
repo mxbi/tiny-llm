@@ -26,12 +26,11 @@ from jax.random import PRNGKey
 
 def rmsnorm_weights(width):
     return {
-        'eps': jnp.array(0.0001),
         'gamma': jnp.ones((width, ))
     }
 
 def rmsnorm(params, x):
-    return x / jnp.sqrt(jnp.mean(x**2, axis=-1, keepdims=True) + params['eps']) * params['gamma']
+    return x / jnp.sqrt(jnp.mean(x**2, axis=-1, keepdims=True) + 1e-4) * params['gamma']
 
 def mha_block_weights(key, n_heads, head_size):
     params = {}
@@ -65,7 +64,7 @@ def mha_block_forward(params, x, n_heads, head_size):
     # i is the current token and j is the token being attended to
     qk = jnp.einsum('ihd,jhd->hij', q, k) / jnp.sqrt(head_size)
     # Mask to avoid attending to future tokens (attending to current token seems ok?
-    qk = jnp.where(jnp.tril(jnp.ones((S, S))), qk, 10**-20)
+    qk = jnp.where(jnp.tril(jnp.ones((S, S))), qk, 10**-9)
     # Get weighted-sum weights with softmax
     qk = jax.nn.softmax(qk, axis=-1)
     output = jnp.einsum('hij,jhd->ihd', qk, v)

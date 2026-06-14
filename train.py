@@ -7,6 +7,12 @@ from transformer import make_llm
 from tokenization import CharTokenizer
 from data import data_iterator, load_tinyshakespeare
 
+import wandb
+run = wandb.init(entity="mxbi", project="teeny-llm")
+
+# Crash when producing a NaN
+jax.config.update("jax_debug_nans", True)
+
 dataset = load_tinyshakespeare()
 tokenizer = CharTokenizer(dataset[0])
 n_vocab = len(tokenizer.tokens)
@@ -15,9 +21,9 @@ key = jax.random.PRNGKey(4)
 params, forward = make_llm(key, n_vocab, 32, 16, 8)
 def get_size(params):
     if isinstance(params, dict):
-        return {k: get_size(v) for k,v in params.items()}
+        return sum(get_size(v) for v in params.values())# {k: get_size(v) for k,v in params.items()}
     return params.size
-print(get_size(params))
+print(f'Model size: {get_size(params)} params, data size: {len(dataset[0])} tokens')
 
 batched_forward = jax.vmap(forward, in_axes=(None, 0))
 
@@ -30,9 +36,11 @@ def mce_loss(params, X):
     acc = jnp.mean(jnp.argmax(p, axis=-1) == X[:, 1:])
     return loss, acc
 
+schedule = 0.001#optax.linear_schedule(0.0, 3e-4, transition_steps=200)
 optimizer = optax.chain(
+    optax.zero_nans(),
     optax.clip_by_global_norm(1.0),
-    optax.adam(learning_rate=0.001),
+    optax.adam(learning_rate=schedule),
 )
 opt_state = optimizer.init(params)
 
@@ -46,10 +54,17 @@ def step(params, X, opt_state):
     # print(f"Epoch {epoch}", end=" ")
 losses = []
 accs = []
-for i, x_batch in enumerate(data_iterator([tokenizer.tokenize(dataset[0])], batch_size=64, context_size=32)):
-    print(f'Batch {i}')
+tok = 0
+for i, x_batch in enumerate(data_iterator([tokenizer.tokenize(dataset[0])], batch_size=32, context_size=32)):
+    tok += x_batch.shape[0] * (x_batch.shape[1] - 1)
     params, opt_state, loss, batch_acc = step(params, x_batch, opt_state)
-    print(loss, batch_acc)
+    # print(loss, batch_acc)
+    print(f'Batch {i} - loss: {loss:.4f} - acc: {batch_acc:.4f} - tok: {tok}')
+    wandb.log({
+        "loss": loss,
+        "acc": batch_acc,
+        "tok": tok,
+    })
 
     losses.append(loss)
     accs.append(batch_acc)
